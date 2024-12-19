@@ -1,2 +1,3 @@
 feedparser
 sqlalchemy
+requests
