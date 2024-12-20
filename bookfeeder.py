@@ -2,9 +2,21 @@ import csv
 import enum
 import feedparser
 import requests
+import json
+import logging
 from sqlalchemy import create_engine, Column, Integer, String, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+
+logging.basicConfig(
+    level=logging.DEBUG,  # Set to DEBUG to capture all levels of logs
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("debug.log"),  # Logs will be written to debug.log
+        logging.StreamHandler()            # Logs will also be output to the console
+    ]
+)
+
 
 # Define the database base model
 Base = declarative_base()
@@ -59,11 +71,9 @@ class Library(Base):
 
             book = session.query(Book).filter_by(authors=authors, title=title).first()
             if book:
-                # Book already exists in the books table: ensure it's active
                 print(f"[DEBUG] Marking '{title}' by '{authors}' as active in books table.")
                 book.mark_as_active()
             else:
-                # Book is in the library but not in the books table: add it as active
                 print(f"[DEBUG] Adding '{title}' by '{authors}' to the books table.")
                 new_book = Book(authors=authors, title=title, status=BookStatus.ACTIVE)
                 session.add(new_book)
@@ -88,16 +98,13 @@ class Library(Base):
 
             # Iterate over each entry
             for entry in feed.entries:
-                # Use 'author_name' from the feed instead of 'author'
                 authors = entry.get('author_name')
                 title = entry.get('title')
 
-                # Check if both authors and title are present
                 if not authors or not title:
                     print(f"[WARNING] Feed entry missing required fields. Authors: {authors}, Title: {title}")
                     continue
 
-                # Trim whitespace just in case
                 authors = authors.strip()
                 title = title.strip()
 
@@ -122,7 +129,6 @@ def import_books_from_csv(csv_file_path, session):
 
         print("Detected CSV Headers:", reader.fieldnames)
 
-        # Validate that the required columns are present
         if 'authors' not in reader.fieldnames or 'title' not in reader.fieldnames:
             raise ValueError("CSV file must contain 'authors' and 'title' columns.")
 
@@ -132,66 +138,28 @@ def import_books_from_csv(csv_file_path, session):
             title = row.get('title')
 
             if authors and title:
-                # Trim whitespace
                 authors = authors.strip()
                 title = title.strip()
 
                 if authors and title:
-                    # Check if this entry already exists in the library to avoid duplicates
                     existing_book = session.query(Library).filter_by(authors=authors, title=title).first()
                     if not existing_book:
                         session.add(Library(authors=authors, title=title))
                         count += 1
-            # If the row is missing authors/title, we just skip it silently.
 
         session.commit()
     print(f"Imported {count} new books from CSV.")
 
 
-if __name__ == "__main__":
-    # Goodreads RSS feed URLs for your shelves
-    goodreads_rss_urls = [
-        'https://www.goodreads.com/review/list_rss/example',
-        'https://www.goodreads.com/review/list/example'
-    ]  # Replace with actual RSS feed URLs
-
-    # Connect to the database (e.g., SQLite)
-    DATABASE_URL = 'sqlite:///books.db'
-    engine = create_engine(DATABASE_URL, echo=False)
-    Base.metadata.create_all(engine)
-
-    # Create a database session
-    Session = sessionmaker(bind=engine)
-    session = Session()
-
-    # Import your current local library of books
-    csv_file_path = 'path/to/your/calibre/library.csv'
-    import_books_from_csv(csv_file_path, session)
-
-    # Sync the books table with your current library state
-    Library.scan_and_update_books(session)
-
-    # Check which books appear in Goodreads RSS but are not in your library
-    missing_books = Library.check_goodreads_rss(goodreads_rss_urls, session)
-    if missing_books:
-        print("Missing books:")
-        for book in missing_books:
-            print(f"Authors: {book['authors']}, Title: {book['title']}")
-    else:
-        print("No missing books found.")
-
-# Configuration
-MAM_BASE_URL = "https://www.myanonamouse.net"  # Base site URL
+# qBittorrent and MyAnonamouse Configuration
+MAM_BASE_URL = "https://www.myanonamouse.net"
 MAM_SEARCH_ENDPOINT = f"{MAM_BASE_URL}/tor/js/loadSearchJSONbasic.php"
+MAM_COOKIE = {"mam_id": "key_here"}
 
-# You need a valid cookie to access MyAnonamouse
-MAM_COOKIE = {"mam_id": "session_cookie_here"}
-
-# qBittorrent configuration
-QB_HOST = "192.XXX.XXX.XXX"
+QB_HOST = "192.168.XXX.XXX"
 QB_PORT = 8080
 QB_USERNAME = "admin"
-QB_PASSWORD = "password"
+QB_PASSWORD = ""
 QB_CATEGORY = "myanonamouse"
 
 # Create a qBittorrent session
@@ -206,31 +174,75 @@ if "Ok." not in login_resp.text:
     raise Exception("Failed to authenticate with qBittorrent")
 
 
+def normalize_string(s):
+    """Normalize string by removing extra whitespace."""
+    return ' '.join(s.split())
+
+
+def author_matches(book_author, author_info_str):
+    """
+    Check if the given book_author matches any of the authors in author_info.
+    author_info is a JSON string like {"8234": "Author Name"}.
+    """
+    if not author_info_str:
+        return False
+
+    try:
+        author_data = json.loads(author_info_str)
+    except json.JSONDecodeError:
+        return False
+
+    norm_requested_author = normalize_string(book_author)
+    for a_id, a_name in author_data.items():
+        if normalize_string(a_name) == norm_requested_author:
+            return True
+
+    return False
+
+
+def title_matches(book_title, torrent_title):
+    """
+    Check if all words of the book_title appear in the torrent_title.
+    """
+    if not torrent_title:
+        return False
+    norm_title = normalize_string(torrent_title)
+    norm_book_title = normalize_string(book_title)
+    return all(word.lower() in norm_title.lower() for word in norm_book_title.split())
+
+
 def search_on_myanonamouse(book_title, book_author):
     """
     Search MyAnonamouse for a given book title and author.
-    Adjust parameters as needed to refine categories, etc.
     """
-    # Combine title and author for search text
-    search_text = f"{book_title} {book_author}"
+    # Enclose title and author in quotes
+    search_text = f'"{book_title}" "{book_author}"'
 
     payload = {
         "tor": {
             "text": search_text,
-            "searchType": "all",
-            "searchIn": "torrents",
-            "cat": ["0"],  # '0' might mean all categories, adjust as needed
-            "sortType": "default",
-            "startNumber": "0",
             "srchIn": {
                 "title": "true",
-                "author": "true"
-            }
+                "author": "true",
+            },
+            "searchType": "all",
+            "searchIn": "torrents",
+            "cat": ["0"],
+            "browseFlagsHideVsShow": "0",
+            "startDate": "",
+            "endDate": "",
+            "hash": "",
+            "sortType": "default",
+            "startNumber": "0"
         },
         "thumbnail": "true"
     }
 
-    # POST request with session cookie
+    # Log the JSON payload being sent
+    logging.debug("JSON Payload Sent to MyAnonamouse:")
+    logging.debug(json.dumps(payload, indent=4, ensure_ascii=False))
+    logging.debug("-" * 50)  # Separator for readability
+
     resp = requests.post(MAM_SEARCH_ENDPOINT, json=payload, cookies=MAM_COOKIE)
     resp.raise_for_status()
 
@@ -238,27 +250,17 @@ def search_on_myanonamouse(book_title, book_author):
     if not results:
         return None
 
-    # Filter results to find the best match
-    # For now, just return the first result. You may need more logic here.
     for r in results:
-        # r['title'] from MAM might be in 'name' or 'title', verify by printing/inspecting
         torrent_title = r.get('name')
-        # Simple check: does torrent title contain the book title's words?
         if torrent_title and all(word.lower() in torrent_title.lower() for word in book_title.split()):
-            # Construct download link
-            # According to the documentation, you can prepend:
-            # https://www.myanonamouse.net/tor/download.php/
-            # or use https://www.myanonamouse.net/tor/download.php?tid=ID
-            # The `dl` field gives a hash, so use the first approach if recommended.
-            
             dl_hash = r.get('dl')
             torrent_id = r.get('id')
             if dl_hash:
-                # Using the hash for dlLink might be complex, consider the ?tid= approach:
                 download_url = f"{MAM_BASE_URL}/tor/download.php?tid={torrent_id}"
                 return download_url
 
     return None
+
 
 
 def add_torrent_to_qbittorrent(torrent_url):
@@ -273,21 +275,43 @@ def add_torrent_to_qbittorrent(torrent_url):
     print("Torrent added to qBittorrent!")
 
 
-# Example: After you get `missing_books` from your code:
-missing_books = [
-    # Example missing books; you'd get this from Library.check_goodreads_rss
-    {"authors": "George Saunders", "title": "Lincoln in the Bardo"},
-    # Add more as needed
-]
+if __name__ == "__main__":
+    # Goodreads RSS feed URLs for your shelves
+    goodreads_rss_urls = [
+        'https://www.goodreads.com/review/list_rss/184080032?example',
+        'https://www.goodreads.com/review/list/184161213?example'
+    ]
 
-for book in missing_books:
-    authors = book['authors']
-    title = book['title']
+    DATABASE_URL = 'sqlite:///books.db'
+    engine = create_engine(DATABASE_URL, echo=False)
+    Base.metadata.create_all(engine)
 
-    print(f"Searching for '{title}' by '{authors}' on MyAnonamouse...")
-    torrent_url = search_on_myanonamouse(title, authors)
-    if torrent_url:
-        print(f"Found torrent for '{title}' by '{authors}': {torrent_url}")
-        add_torrent_to_qbittorrent(torrent_url)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    csv_file_path = '/path/to/your/calibre/library.csv'
+    import_books_from_csv(csv_file_path, session)
+
+    Library.scan_and_update_books(session)
+
+    missing_books = Library.check_goodreads_rss(goodreads_rss_urls, session)
+    if missing_books:
+        print("Missing books:")
+        print(json.dumps(missing_books, indent=4, ensure_ascii=False))
+        for book in missing_books:
+            print(f"Authors: {book['authors']}, Title: {book['title']}")
     else:
-        print(f"No torrent found for '{title}' by '{authors}' on MyAnonamouse")
+        print("No missing books found.")
+
+    # Only search MyAnonamouse and add to qBittorrent if we have missing books
+    if missing_books:
+        for book in missing_books:
+            authors = book['authors']
+            title = book['title']
+            print(f"Searching for '{title}' by '{authors}' on MyAnonamouse...")
+            torrent_url = search_on_myanonamouse(title, authors)
+            if torrent_url:
+                print(f"Found torrent for '{title}' by '{authors}': {torrent_url}")
+                add_torrent_to_qbittorrent(torrent_url)
+            else:
+                print(f"No torrent found for '{title}' by '{authors}' on MyAnonamouse")
