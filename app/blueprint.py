@@ -34,30 +34,17 @@ def create():
 
 
 def get():
-    book_id = request.args.get('id')
-    if not book_id:
-        return jsonify({"error": "No id provided"}), 400
-
-    obj = Book.get(_id=book_id)
+    obj = _by_request_id()
     if not obj:
         return jsonify({"error": "Book not found"}), 404
-
     return jsonify(obj.to_dict()), 200
 
 
 def update():
-    book_id = request.args.get('id')
-    if not book_id:
-        return jsonify({"error": "No id provided"}), 400
-
-    obj = Book.get(_id=book_id)
-    if not obj:
-        return jsonify({"error": "Book not found"}), 404
-
+    obj = _by_request_id()
     payload = request.get_json(silent=True)
     if not payload:
         return jsonify({"error": "Invalid or no JSON payload provided"}), 400
-
     try:
         updated_obj = obj.update(**payload)
         return jsonify(updated_obj.to_dict()), 200
@@ -66,16 +53,19 @@ def update():
 
 
 def delete():
-    book_id = request.args.get('id')
-    if not book_id:
-        return jsonify({"error": "No id provided"}), 400
-
-    obj = Book.get(_id=book_id)
-    if not obj:
-        return jsonify({"error": "Book not found"}), 404
-
+    obj = _by_request_id()
     try:
         deleted_obj = obj.delete()
         return jsonify(deleted_obj.to_dict()), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _by_request_id():
+    book_id = request.args.get('id')
+    if not book_id:
+        return None
+    obj = Book.get(_id=book_id)
+    if not obj:
+        return None
+    return obj
