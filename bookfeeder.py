@@ -21,6 +21,7 @@ logging.basicConfig(
 # Define the database base model
 Base = declarative_base()
 
+
 class BookStatus(enum.Enum):
     ACTIVE = "active"
     MISSING = "missing"
@@ -34,7 +35,8 @@ class Book(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     authors = Column(String, nullable=False)
     title = Column(String, nullable=False)
-    status = Column(Enum(BookStatus), default=BookStatus.ACTIVE, nullable=False)
+    status = Column(Enum(BookStatus),
+                    default=BookStatus.ACTIVE, nullable=False)
 
     def mark_as_missing(self):
         """Mark this book as missing."""
@@ -69,13 +71,17 @@ class Library(Base):
             authors = lib_book.authors.strip()
             title = lib_book.title.strip()
 
-            book = session.query(Book).filter_by(authors=authors, title=title).first()
+            book = session.query(Book).filter_by(
+                authors=authors, title=title).first()
             if book:
-                print(f"[DEBUG] Marking '{title}' by '{authors}' as active in books table.")
+                print(
+                    f"[DEBUG] Marking '{title}' by '{authors}' as active in books table.")
                 book.mark_as_active()
             else:
-                print(f"[DEBUG] Adding '{title}' by '{authors}' to the books table.")
-                new_book = Book(authors=authors, title=title, status=BookStatus.ACTIVE)
+                print(
+                    f"[DEBUG] Adding '{title}' by '{authors}' to the books table.")
+                new_book = Book(authors=authors, title=title,
+                                status=BookStatus.ACTIVE)
                 session.add(new_book)
         session.commit()
 
@@ -102,19 +108,22 @@ class Library(Base):
                 title = entry.get('title')
 
                 if not authors or not title:
-                    print(f"[WARNING] Feed entry missing required fields. Authors: {authors}, Title: {title}")
+                    print(
+                        f"[WARNING] Feed entry missing required fields. Authors: {authors}, Title: {title}")
                     continue
 
                 authors = authors.strip()
                 title = title.strip()
 
                 # Check if this book is in the library
-                book_in_library = session.query(Library).filter_by(authors=authors, title=title).first()
+                book_in_library = session.query(Library).filter_by(
+                    authors=authors, title=title).first()
 
                 # If not in library, consider it missing and avoid duplicates
                 if not book_in_library:
                     if not any(book for book in missing_books if book['authors'] == authors and book['title'] == title):
-                        missing_books.append({"authors": authors, "title": title})
+                        missing_books.append(
+                            {"authors": authors, "title": title})
 
         return missing_books
 
@@ -130,7 +139,8 @@ def import_books_from_csv(csv_file_path, session):
         print("Detected CSV Headers:", reader.fieldnames)
 
         if 'authors' not in reader.fieldnames or 'title' not in reader.fieldnames:
-            raise ValueError("CSV file must contain 'authors' and 'title' columns.")
+            raise ValueError(
+                "CSV file must contain 'authors' and 'title' columns.")
 
         count = 0
         for row in reader:
@@ -142,7 +152,8 @@ def import_books_from_csv(csv_file_path, session):
                 title = title.strip()
 
                 if authors and title:
-                    existing_book = session.query(Library).filter_by(authors=authors, title=title).first()
+                    existing_book = session.query(Library).filter_by(
+                        authors=authors, title=title).first()
                     if not existing_book:
                         session.add(Library(authors=authors, title=title))
                         count += 1
@@ -168,7 +179,8 @@ login_data = {
     'username': QB_USERNAME,
     'password': QB_PASSWORD
 }
-login_resp = qb_session.post(f"http://{QB_HOST}:{QB_PORT}/api/v2/auth/login", data=login_data)
+login_resp = qb_session.post(
+    f"http://{QB_HOST}:{QB_PORT}/api/v2/auth/login", data=login_data)
 login_resp.raise_for_status()
 if "Ok." not in login_resp.text:
     raise Exception("Failed to authenticate with qBittorrent")
@@ -262,13 +274,13 @@ def search_on_myanonamouse(book_title, book_author):
     return None
 
 
-
 def add_torrent_to_qbittorrent(torrent_url):
     add_data = {
         'urls': torrent_url,
         'category': QB_CATEGORY
     }
-    add_resp = qb_session.post(f"http://{QB_HOST}:{QB_PORT}/api/v2/torrents/add", data=add_data)
+    add_resp = qb_session.post(
+        f"http://{QB_HOST}:{QB_PORT}/api/v2/torrents/add", data=add_data)
     add_resp.raise_for_status()
     if add_resp.text:
         print("qBittorrent response:", add_resp.text)
@@ -311,7 +323,9 @@ if __name__ == "__main__":
             print(f"Searching for '{title}' by '{authors}' on MyAnonamouse...")
             torrent_url = search_on_myanonamouse(title, authors)
             if torrent_url:
-                print(f"Found torrent for '{title}' by '{authors}': {torrent_url}")
+                print(
+                    f"Found torrent for '{title}' by '{authors}': {torrent_url}")
                 add_torrent_to_qbittorrent(torrent_url)
             else:
-                print(f"No torrent found for '{title}' by '{authors}' on MyAnonamouse")
+                print(
+                    f"No torrent found for '{title}' by '{authors}' on MyAnonamouse")

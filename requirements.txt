@@ -1,3 +1,5 @@
-feedparser
-sqlalchemy
-requests
+Flask
+Flask-SQLAlchemy
+python-dotenv
+inflection
+flask-serialize
